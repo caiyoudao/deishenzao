@@ -1,0 +1,215 @@
+Tamura图像特征提取
+function feature=Tamura1(imag)
+             feature=zeros(1,6);   
+             Fcrs=coarseness(imag,4);
+             Fcon=contrast(imag);
+             [Fdir,sita]=directionality(imag);
+             Flin=linelikeness(imag,sita,4);
+             Freg=regularity(imag,32);
+             Frgh=Fcrs+Fcon;
+             feature(1,:)=[ Fcrs,Fcon,Fdir,Flin,Freg,Frgh];
+end
+
+%% 第一个指标 Coarseness，粗糙度
+
+function Fcrs = coarseness( graypic,kmax )%graphic为待处理的灰度图像，2^kmax为最大窗口  
+[h,w]=size(graypic); %获取图片大小  
+A=zeros(h,w,2^kmax); %平均灰度值矩阵A  
+%计算有效可计算范围内每个点的2^k邻域内的平均灰度值  
+for i=2^(kmax-1)+1:h-2^(kmax-1)  
+    for j=2^(kmax-1)+1:w-2^(kmax-1)  
+        for k=1:kmax  
+            A(i,j,k)=mean2(graypic(i-2^(k-1):i+2^(k-1)-1,j-2^(k-1):j+2^(k-1)-1));  
+        end  
+    end  
+end  
+%对每个像素点计算在水平和垂直方向上不重叠窗口之间的Ak差  
+for i=1+2^(kmax-1):h-2^(kmax-1)  
+    for j=1+2^(kmax-1):w-2^(kmax-1)  
+        for k=1:kmax  
+            Eh(i,j,k)=abs(A(i+2^(k-1),j,k)-A(i-2^(k-1),j));  
+            Ev(i,j,k)=abs(A(i,j+2^(k-1),k)-A(i,j-2^(k-1)));  
+        end  
+    end  
+end  
+%对每个像素点计算使E达到最大值的k  
+for i=2^(kmax-1)+1:h-2^(kmax-1)  
+    for j=2^(kmax-1)+1:w-2^(kmax-1)  
+        [maxEh,p]=max(Eh(i,j,:));  
+        [maxEv,q]=max(Ev(i,j,:));  
+        if maxEh>maxEv  
+            maxkk=p;  
+        else  
+            maxkk=q;  
+        end  
+        Sbest(i,j)=2^maxkk; %每个像素点的最优窗口大小为2^maxkk  
+    end  
+end  
+%所有Sbest的均值作为整幅图片的粗糙度  
+Fcrs=mean2(Sbest);  
+end 
+
+
+%% 第二个指标 Contrast，对比度
+%注意这个函数因为涉及到方差，要求输入类型为double，因此我这里在源代码上做了适当的修改  
+function Fcon=contrast(graypic) %graypic为待处理的灰度图片  
+graypic=double(graypic);%这一句我自己做了修改，否则原博文中的代码不能直接运行  
+x=graypic(:); %二维向量一维化  
+M4=mean((x-mean(x)).^4); %四阶矩  
+delta2=var(x,1); %方差  
+alfa4=M4/(delta2^2); %峰度  
+delta=std(x,1); %标准差  
+Fcon=delta/(alfa4^(1/4)); %对比度  
+end  
+
+%% 第三个指标 Directionality，方向度
+%sita为各像素点的角度矩阵，在线性度中会用到，所以这里作为结果返回  
+function [Fdir,sita]=directionality(graypic)  
+[h, w]=size(graypic);  
+%两个方向的卷积矩阵  
+GradientH=[-1 0 1;-1 0 1;-1 0 1];  
+GradientV=[ 1 1 1;0 0 0;-1 -1 -1];  
+%卷积，取有效结果矩阵  
+MHconv=conv2(graypic,GradientH);  
+MH=MHconv(3:h,3:w);  
+MVconv=conv2(graypic,GradientV);  
+MV=MVconv(3:h,3:w);  
+%向量模  
+MG=(abs(MH)+abs(MV))./2;  
+%有效矩阵大小  
+validH=h-2;  
+validW=w-2;  
+%各像素点的方向  
+for i=1:validH  
+    for j=1:validW  
+        sita(i,j)=atan(MV(i,j)/MH(i,j))+(pi/2);  
+    end  
+end  
+n=16;  
+t=0;  
+Nsita=zeros(1,n);  
+%构造方向的统计直方图  
+for i=1:validH  
+    for j=1:validW  
+        for k=1:n  
+            if sita(i,j)>=(2*(k-1)*pi/2/n) && sita(i,j)<((2*(k-1)+1)*pi/2/n) && MG(i,j)>=t  
+                Nsita(k)=Nsita(k)+1;  
+            end  
+        end  
+    end  
+end  
+for k=1:n  
+    HD(k)=Nsita(k)/sum(Nsita(:));  
+end  
+%假设每幅图片只有一个方向峰值，为计算方便简化了原著  
+[maxvalue,FIp]=max(HD);  
+Fdir=0;  
+for k=1:n  
+    Fdir=Fdir+(k-FIp)^2*HD(k);%公式与原著有改动  
+end  
+end  
+
+%% 第四个指标 Linelikeness，线性度
+%image=rgb2gray(imread('example.jpg'));  
+%Flin=linelikeness(image,sita,4) %sita为directionality.m返回的结果  
+function Flin=linelikeness(graypic,sita,d) %d为共生矩阵计算时的像素间隔距离  
+n=16;  
+[h,w]=size(graypic);  
+%构造方向共生矩阵  
+PDd1=zeros(n,n);  
+PDd2=zeros(n,n);  
+PDd3=zeros(n,n);  
+PDd4=zeros(n,n);  
+PDd5=zeros(n,n);  
+PDd6=zeros(n,n);  
+PDd7=zeros(n,n);  
+PDd8=zeros(n,n);  
+for i=d+1:h-d-2  
+    for j=d+1:w-d-2  
+        for m1=1:n  
+            for m2=1:n  
+                %下方向   
+                if (sita(i,j)>=(2*(m1-1)*pi/2/n) && sita(i,j)<((2*(m1-1)+1)*pi/2/n)) && (sita(i+d,j)>=(2*(m2-1)*pi/2/n) && sita(i+d,j)<((2*(m2-1)+1)*pi/2/n))  
+                    PDd1(m1,m2)=PDd1(m1,m2)+1;  
+                end  
+                %上方向  
+                if (sita(i,j)>=(2*(m1-1)*pi/2/n) && sita(i,j)<((2*(m1-1)+1)*pi/2/n)) && (sita(i-d,j)>=(2*(m2-1)*pi/2/n) && sita(i-d,j)<((2*(m2-1)+1)*pi/2/n))  
+                    PDd2(m1,m2)=PDd2(m1,m2)+1;  
+                end  
+                %右方向  
+                if (sita(i,j)>=(2*(m1-1)*pi/2/n) && sita(i,j)<((2*(m1-1)+1)*pi/2/n)) && (sita(i,j+d)>=(2*(m2-1)*pi/2/n) && sita(i,j+d)<((2*(m2-1)+1)*pi/2/n))  
+                    PDd3(m1,m2)=PDd3(m1,m2)+1;  
+                end  
+                %左方向  
+                if (sita(i,j)>=(2*(m1-1)*pi/2/n) && sita(i,j)<((2*(m1-1)+1)*pi/2/n)) && (sita(i,j-d)>=(2*(m2-1)*pi/2/n) && sita(i,j-d)<((2*(m2-1)+1)*pi/2/n))  
+                    PDd4(m1,m2)=PDd4(m1,m2)+1;  
+                end  
+                %右下方向  
+                if (sita(i,j)>=(2*(m1-1)*pi/2/n) && sita(i,j)<((2*(m1-1)+1)*pi/2/n)) && (sita(i+d,j+d)>=(2*(m2-1)*pi/2/n) && sita(i+d,j+d)<((2*(m2-1)+1)*pi/2/n))  
+                    PDd5(m1,m2)=PDd5(m1,m2)+1;  
+                end  
+                %右上方向  
+                if (sita(i,j)>=(2*(m1-1)*pi/2/n) && sita(i,j)<((2*(m1-1)+1)*pi/2/n)) && (sita(i-d,j+d)>=(2*(m2-1)*pi/2/n) && sita(i-d,j+d)<((2*(m2-1)+1)*pi/2/n))  
+                    PDd6(m1,m2)=PDd6(m1,m2)+1;  
+                end  
+                %左下方向  
+                if (sita(i,j)>=(2*(m1-1)*pi/2/n) && sita(i,j)<((2*(m1-1)+1)*pi/2/n)) && (sita(i+d,j-d)>=(2*(m2-1)*pi/2/n) && sita(i+d,j-d)<((2*(m2-1)+1)*pi/2/n))  
+                    PDd7(m1,m2)=PDd7(m1,m2)+1;  
+                end  
+                %左上方向  
+                if (sita(i,j)>=(2*(m1-1)*pi/2/n) && sita(i,j)<((2*(m1-1)+1)*pi/2/n)) && (sita(i-d,j-d)>=(2*(m2-1)*pi/2/n) && sita(i-d,j-d)<((2*(m2-1)+1)*pi/2/n))  
+                    PDd8(m1,m2)=PDd8(m1,m2)+1;  
+                end  
+            end  
+        end  
+    end  
+end  
+f=zeros(1,8);  
+g=zeros(1,8);  
+for i=1:n  
+    for j=1:n  
+        f(1)=f(1)+PDd1(i,j)*cos((i-j)*2*pi/n);  
+        g(1)=g(1)+PDd1(i,j);  
+        f(2)=f(2)+PDd2(i,j)*cos((i-j)*2*pi/n);  
+        g(2)=g(2)+PDd2(i,j);  
+        f(3)=f(3)+PDd3(i,j)*cos((i-j)*2*pi/n);  
+        g(3)=g(3)+PDd3(i,j);  
+        f(4)=f(4)+PDd4(i,j)*cos((i-j)*2*pi/n);  
+        g(4)=g(4)+PDd4(i,j);  
+        f(5)=f(5)+PDd5(i,j)*cos((i-j)*2*pi/n);  
+        g(5)=g(5)+PDd5(i,j);  
+        f(6)=f(6)+PDd6(i,j)*cos((i-j)*2*pi/n);  
+        g(6)=g(6)+PDd6(i,j);  
+        f(7)=f(7)+PDd7(i,j)*cos((i-j)*2*pi/n);  
+        g(7)=g(7)+PDd7(i,j);  
+        f(8)=f(8)+PDd8(i,j)*cos((i-j)*2*pi/n);  
+        g(8)=g(4)+PDd8(i,j);  
+    end  
+end  
+tempM=f./g;  
+Flin=max(tempM);%取8个方向的线性度最大值作为图片的线性度  
+end  
+
+
+%% 第五个指标 Regularity，规则度  
+%image=rgb2gray(imread('example.jpg'));  
+%Freg=regularity(image,64)  
+function Freg=regularity(graypic,windowsize) %windowsize为计算规则度的子窗口大小  
+% windowsize=64;
+[h,w]=size(graypic);  
+k=0;  
+for i=1:windowsize:h-windowsize  
+    for j=1:windowsize:w-windowsize  
+        k=k+1;  
+        crs(k)=coarseness(graypic(i:i+windowsize-1,j:j+windowsize-1),4); %粗糙度  
+        con(k)=contrast(graypic(i:i+windowsize-1,j:j+windowsize-1)); %对比度  
+        [dire(k),sita]=directionality(graypic(i:i+windowsize-1,j:j+windowsize-1));%方向度  
+        lin=linelikeness(graypic(i:i+windowsize-1,j:j+windowsize-1),sita,4)*10; %线性度，*10与crs、con、dire同量级化  
+    end  
+end 
+Dcrs=std(crs,1);  
+Dcon=std(con,1);  
+Ddir=std(dire,1);  
+Dlin=std(lin,1);
+Freg=1-(Dcrs+Dcon+Ddir+Dlin)/4/100;
+end
